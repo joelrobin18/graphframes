@@ -100,6 +100,9 @@ class Pregel(val graph: GraphFrame)
   private val sendMsgs = collection.mutable.ListBuffer.empty[(Column, Column)]
   private var aggMsgsCol: Column = null
 
+  private var srcColumns: Option[Seq[Column]] = None
+  private var dstColumns: Option[Seq[Column]] = None
+
   /** Sets the max number of iterations (default: 10). */
   def setMaxIter(value: Int): this.type = {
     maxIter = value
@@ -305,6 +308,42 @@ class Pregel(val graph: GraphFrame)
   }
 
   /**
+   * Specifies which source vertex columns are required when constructing triplets.
+   *
+   * This is an optimization to reduce memory usage by selecting only the necessary columns
+   * instead of all vertex columns. The ID column is always included automatically.
+   *
+   * @param col
+   *   the first required source vertex column name
+   * @param cols
+   *   additional required source vertex column names
+   * @return
+   *   this Pregel instance
+   */
+  def requiredSrcColumns(col: Column, cols: Column*): this.type = {
+    srcColumns = Some(col +: cols)
+    this
+  }
+
+  /**
+   * Specifies which destination vertex columns are required when constructing triplets.
+   *
+   * This is an optimization to reduce memory usage by selecting only the necessary columns
+   * instead of all vertex columns. The ID column is always included automatically.
+   *
+   * @param col
+   *   the first required destination vertex column name
+   * @param cols
+   *   additional required destination vertex column names
+   * @return
+   *   this Pregel instance
+   */
+  def requiredDstColumns(col: Column, cols: Column*): this.type = {
+    dstColumns = Some(col +: cols)
+    this
+  }
+
+  /**
    * Runs the defined Pregel algorithm.
    *
    * @return
@@ -369,11 +408,28 @@ class Pregel(val graph: GraphFrame)
         logInfo(s"start Pregel iteration $iteration / $maxIter")
         val currRoundPersistent = scala.collection.mutable.Queue[DataFrame]()
         currRoundPersistent.enqueue(currentVertices.persist(intermediateStorageLevel))
+
+        // Determine which columns to select for source and destination vertices
+        // Always include ID and active flag columns
+        val srcStruct = srcColumns match {
+          case Some(cols) =>
+            struct((Seq(col(ID), col(Pregel.ACTIVE_FLAG_COL)) ++ cols): _*)
+          case None =>
+            struct(col("*"))
+        }
+
+        val dstStruct = dstColumns match {
+          case Some(cols) =>
+            struct((Seq(col(ID), col(Pregel.ACTIVE_FLAG_COL)) ++ cols): _*)
+          case None =>
+            struct(col("*"))
+        }
+
         var tripletsDF = currentVertices
-          .select(struct(col("*")).as(SRC))
+          .select(srcStruct.as(SRC))
           .join(edges, Pregel.src(ID) === col("edge_src"))
           .join(
-            currentVertices.select(struct(col("*")).as(DST)),
+            currentVertices.select(dstStruct.as(DST)),
             col("edge_dst") === Pregel.dst(ID))
           .drop(col("edge_src"), col("edge_dst"))
 

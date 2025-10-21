@@ -93,6 +93,7 @@ object DetectingCycles {
       .withVertexColumn(storedSeqCol, initSequences, updateSequences)
       .withVertexColumn(foundSeqCol, foundSequences, updateFound)
       .aggMsgs(filterOutSequences)
+      .requiredSrcColumns(col(storedSeqCol))
       .run()
   }
 }

@@ -121,9 +121,15 @@ private object LabelPropagation {
       .setIntermediateStorageLevel(intermediateStorageLevel)
 
     if (isDirected) {
-      pregel = pregel.sendMsgToDst(Pregel.src(LABEL_ID))
+      pregel = pregel
+        .sendMsgToDst(Pregel.src(LABEL_ID))
+        .requiredSrcColumns(col(LABEL_ID))
     } else {
-      pregel = pregel.sendMsgToDst(Pregel.src(LABEL_ID)).sendMsgToSrc(Pregel.dst(LABEL_ID))
+      pregel = pregel
+        .sendMsgToDst(Pregel.src(LABEL_ID))
+        .sendMsgToSrc(Pregel.dst(LABEL_ID))
+        .requiredSrcColumns(col(LABEL_ID))
+        .requiredDstColumns(col(LABEL_ID))
     }
 
     pregel = pregel.aggMsgs(

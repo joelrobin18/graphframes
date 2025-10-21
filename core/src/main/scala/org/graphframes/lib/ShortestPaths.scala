@@ -228,6 +228,8 @@ private object ShortestPaths extends Logging {
       .setSkipMessagesFromNonActiveVertices(true)
       .setCheckpointInterval(checkpointInterval)
       .setUseLocalCheckpoints(useLocalCheckpoints)
+      .requiredSrcColumns(col(DISTANCE_ID))
+      .requiredDstColumns(col(DISTANCE_ID))
 
     // Experimental feature
     if (isDirected) {

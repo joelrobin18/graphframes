@@ -17,11 +17,17 @@
 
 from typing import final
 
+from pyspark import __version__
 from pyspark.ml.wrapper import JavaWrapper
-from pyspark.sql import Column, DataFrame, SparkSession
-from pyspark.sql.functions import col
+from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql.functions import col as sql_col
 from pyspark.storagelevel import StorageLevel
 from typing_extensions import Self
+
+if __version__.startswith("4"):
+    from pyspark.sql.classic.column import Column, _to_seq
+else:
+    from pyspark.sql.column import Column, _to_seq
 
 from graphframes.classic.utils import storage_level_to_jvm
 
@@ -155,6 +161,36 @@ class Pregel(JavaWrapper):
         self._java_obj.aggMsgs(aggExpr._jc)
         return self
 
+    def requiredSrcColumns(self, col: Column, *cols: Column) -> "Pregel":
+        """Specifies which source vertex columns are required when constructing triplets.
+
+        This is an optimization to reduce memory usage by selecting only the necessary columns
+        instead of all vertex columns. The ID column is always included automatically.
+
+        :param col: the first required source vertex column
+        :param cols: additional required source vertex columns
+        :return: this Pregel instance
+        """  # noqa: E501
+        sc = self.graph._spark.sparkContext
+        java_cols = [c._jc for c in cols]
+        self._java_obj.requiredSrcColumns(col._jc, _to_seq(sc, java_cols))
+        return self
+
+    def requiredDstColumns(self, col: Column, *cols: Column) -> "Pregel":
+        """Specifies which destination vertex columns are required when constructing triplets.
+
+        This is an optimization to reduce memory usage by selecting only the necessary columns
+        instead of all vertex columns. The ID column is always included automatically.
+
+        :param col: the first required destination vertex column
+        :param cols: additional required destination vertex columns
+        :return: this Pregel instance
+        """  # noqa: E501
+        sc = self.graph._spark.sparkContext
+        java_cols = [c._jc for c in cols]
+        self._java_obj.requiredDstColumns(col._jc, _to_seq(sc, java_cols))
+        return self
+
     def setStopIfAllNonActiveVertices(self, value: bool) -> Self:
         """Set should Pregel stop if all the vertices voted to halt.
 
@@ -245,7 +281,7 @@ class Pregel(JavaWrapper):
 
         See :func:`aggMsgs` and :func:`withVertexColumn`
         """  # noqa: E501
-        return col("_pregel_msg_")
+        return sql_col("_pregel_msg_")
 
     @staticmethod
     def src(colName: str) -> Column:
@@ -255,7 +291,7 @@ class Pregel(JavaWrapper):
 
         :param colName: the vertex column name.
         """
-        return col("src." + colName)
+        return sql_col("src." + colName)
 
     @staticmethod
     def dst(colName: str) -> Column:
@@ -266,7 +302,7 @@ class Pregel(JavaWrapper):
 
         :param colName: the vertex column name.
         """
-        return col("dst." + colName)
+        return sql_col("dst." + colName)
 
     @staticmethod
     def edge(colName: str) -> Column:
@@ -277,4 +313,4 @@ class Pregel(JavaWrapper):
 
         :param colName: the edge column name.
         """
-        return col("edge." + colName)
+        return sql_col("edge." + colName)
