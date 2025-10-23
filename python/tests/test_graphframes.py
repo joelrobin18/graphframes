@@ -553,3 +553,269 @@ def test_graph_grid_ising_model(spark: SparkSession):
     for i in range(n):
         for j in range(n):
             assert f"{i},{j}" in ids
+
+
+def test_pregel_column_selection_src_only(spark: SparkSession) -> None:
+    """Test column selection optimization with requiredSrcColumns only."""
+    vertices = spark.createDataFrame(
+        [(1,), (2,), (3,), (4,), (5,)], ["id"]
+    ).withColumn("extraColumn1", sqlfunctions.lit("unused")).withColumn(
+        "extraColumn2", sqlfunctions.lit(999)
+    )
+    edges = spark.createDataFrame(
+        [(1, 2), (2, 3), (3, 4), (4, 5)], ["src", "dst"]
+    )
+    graph = GraphFrame(vertices, edges)
+    pregel = graph.pregel
+
+    result = (
+        pregel.setMaxIter(4)
+        .withVertexColumn(
+            "value",
+            sqlfunctions.when(sqlfunctions.col("id") == 1, 1).otherwise(0),
+            sqlfunctions.when(
+                pregel.msg() > sqlfunctions.col("value"), pregel.msg()
+            ).otherwise(sqlfunctions.col("value")),
+        )
+        .sendMsgToDst(pregel.src("value"))
+        .aggMsgs(sqlfunctions.max(pregel.msg()))
+        .requiredSrcColumns(sqlfunctions.col("value"))
+        .run()
+    )
+
+    values = [row.value for row in result.sort("id").collect()]
+    assert values == [1, 1, 1, 1, 1]
+
+
+def test_pregel_column_selection_dst_only(spark: SparkSession) -> None:
+    """Test column selection optimization with requiredDstColumns only."""
+    vertices = spark.createDataFrame(
+        [(1,), (2,), (3,), (4,), (5,)], ["id"]
+    ).withColumn("extraColumn1", sqlfunctions.lit("unused")).withColumn(
+        "extraColumn2", sqlfunctions.lit(999)
+    )
+    edges = spark.createDataFrame(
+        [(2, 1), (3, 2), (4, 3), (5, 4)], ["src", "dst"]
+    )
+    graph = GraphFrame(vertices, edges)
+    pregel = graph.pregel
+
+    result = (
+        pregel.setMaxIter(4)
+        .withVertexColumn(
+            "value",
+            sqlfunctions.when(sqlfunctions.col("id") == 1, 1).otherwise(0),
+            sqlfunctions.when(
+                pregel.msg() > sqlfunctions.col("value"), pregel.msg()
+            ).otherwise(sqlfunctions.col("value")),
+        )
+        .sendMsgToSrc(pregel.dst("value"))
+        .aggMsgs(sqlfunctions.max(pregel.msg()))
+        .requiredDstColumns(sqlfunctions.col("value"))
+        .run()
+    )
+
+    values = [row.value for row in result.sort("id").collect()]
+    assert values == [1, 1, 1, 1, 1]
+
+
+def test_pregel_column_selection_both(spark: SparkSession) -> None:
+    """Test column selection optimization with both requiredSrcColumns and requiredDstColumns."""
+    vertices = spark.createDataFrame(
+        [(1,), (2,), (3,), (4,), (5,)], ["id"]
+    ).withColumn("extraColumn1", sqlfunctions.lit("unused")).withColumn(
+        "extraColumn2", sqlfunctions.lit(999)
+    )
+    edges = spark.createDataFrame(
+        [(1, 2), (2, 3), (3, 4), (4, 5)], ["src", "dst"]
+    )
+    graph = GraphFrame(vertices, edges)
+    pregel = graph.pregel
+
+    result = (
+        pregel.setMaxIter(4)
+        .withVertexColumn(
+            "value",
+            sqlfunctions.when(sqlfunctions.col("id") == 1, 1).otherwise(0),
+            sqlfunctions.when(
+                pregel.msg() > sqlfunctions.col("value"), pregel.msg()
+            ).otherwise(sqlfunctions.col("value")),
+        )
+        .sendMsgToDst(
+            sqlfunctions.when(
+                pregel.dst("value") != pregel.src("value"), pregel.src("value")
+            )
+        )
+        .aggMsgs(sqlfunctions.max(pregel.msg()))
+        .requiredSrcColumns(sqlfunctions.col("value"))
+        .requiredDstColumns(sqlfunctions.col("value"))
+        .run()
+    )
+
+    values = [row.value for row in result.sort("id").collect()]
+    assert values == [1, 1, 1, 1, 1]
+
+
+def test_pregel_column_selection_multiple_columns(spark: SparkSession) -> None:
+    """Test column selection optimization with multiple columns."""
+    vertices = spark.createDataFrame([(1,), (2,), (3,), (4,)], ["id"]).withColumn(
+        "extraColumn", sqlfunctions.lit("unused")
+    )
+    edges = spark.createDataFrame([(1, 2), (2, 3), (3, 4)], ["src", "dst"])
+    graph = GraphFrame(vertices, edges)
+    pregel = graph.pregel
+
+    result = (
+        pregel.setMaxIter(3)
+        .withVertexColumn(
+            "sum",
+            sqlfunctions.when(sqlfunctions.col("id") == 1, 1).otherwise(0),
+            sqlfunctions.col("sum")
+            + sqlfunctions.coalesce(pregel.msg().getField("value"), sqlfunctions.lit(0)),
+        )
+        .withVertexColumn(
+            "count",
+            sqlfunctions.lit(0),
+            sqlfunctions.col("count")
+            + sqlfunctions.coalesce(pregel.msg().getField("counter"), sqlfunctions.lit(0)),
+        )
+        .sendMsgToDst(
+            sqlfunctions.struct(
+                pregel.src("sum").alias("value"), sqlfunctions.lit(1).alias("counter")
+            )
+        )
+        .aggMsgs(
+            sqlfunctions.struct(
+                sqlfunctions.max(pregel.msg().getField("value")).alias("value"),
+                sqlfunctions.sum(pregel.msg().getField("counter")).alias("counter"),
+            )
+        )
+        .requiredSrcColumns(sqlfunctions.col("sum"), sqlfunctions.col("count"))
+        .requiredDstColumns(sqlfunctions.col("sum"), sqlfunctions.col("count"))
+        .run()
+    )
+
+    collected = result.sort("id").select("sum", "count").collect()
+    for row in collected:
+        assert row["sum"] == 1
+
+
+def test_pregel_backward_compatibility(spark: SparkSession) -> None:
+    """Test backward compatibility - Pregel works without column selection."""
+    vertices = spark.createDataFrame(
+        [(1,), (2,), (3,), (4,), (5,)], ["id"]
+    ).withColumn("extraColumn1", sqlfunctions.lit("data")).withColumn(
+        "extraColumn2", sqlfunctions.lit(100)
+    )
+    edges = spark.createDataFrame(
+        [(1, 2), (2, 3), (3, 4), (4, 5)], ["src", "dst"]
+    )
+    graph = GraphFrame(vertices, edges)
+    pregel = graph.pregel
+
+    result = (
+        pregel.setMaxIter(4)
+        .withVertexColumn(
+            "value",
+            sqlfunctions.when(sqlfunctions.col("id") == 1, 1).otherwise(0),
+            sqlfunctions.when(
+                pregel.msg() > sqlfunctions.col("value"), pregel.msg()
+            ).otherwise(sqlfunctions.col("value")),
+        )
+        .sendMsgToDst(pregel.src("value"))
+        .aggMsgs(sqlfunctions.max(pregel.msg()))
+        # Note: NOT calling requiredSrcColumns or requiredDstColumns
+        .run()
+    )
+
+    values = [row.value for row in result.sort("id").collect()]
+    assert values == [1, 1, 1, 1, 1]
+
+    # Verify extra columns are still present
+    columns = result.columns
+    assert "extraColumn1" in columns
+    assert "extraColumn2" in columns
+
+
+def test_pregel_column_selection_with_edge_attributes(spark: SparkSession) -> None:
+    """Test that edge columns are still accessible when using column selection."""
+    vertices = spark.createDataFrame([(1,), (2,), (3,)], ["id"]).withColumn(
+        "extraColumn", sqlfunctions.lit("unused")
+    )
+    edges = spark.createDataFrame([(1, 2, 10), (2, 3, 20)], ["src", "dst", "weight"])
+    graph = GraphFrame(vertices, edges)
+    pregel = graph.pregel
+
+    result = (
+        pregel.setMaxIter(2)
+        .withVertexColumn(
+            "totalWeight",
+            sqlfunctions.lit(0),
+            sqlfunctions.col("totalWeight")
+            + sqlfunctions.coalesce(pregel.msg(), sqlfunctions.lit(0)),
+        )
+        .sendMsgToDst(pregel.edge("weight"))
+        .aggMsgs(sqlfunctions.sum(pregel.msg()))
+        .requiredSrcColumns(sqlfunctions.col("totalWeight"))
+        .requiredDstColumns(sqlfunctions.col("totalWeight"))
+        .run()
+    )
+
+    weights = [row.totalWeight for row in result.sort("id").collect()]
+    assert weights[0] == 0  # vertex 1 receives no messages
+    assert weights[1] == 10  # vertex 2 receives weight 10
+    assert weights[2] == 20  # vertex 3 receives weight 20
+
+
+def test_pregel_column_selection_pagerank_comparison(spark: SparkSession) -> None:
+    """Test that PageRank produces identical results with and without column selection."""
+    edges = spark.createDataFrame(
+        [(0, 1), (1, 2), (2, 4), (2, 0), (3, 4), (4, 0), (4, 2)], ["src", "dst"]
+    )
+    _ = edges.cache()
+    vertices = spark.createDataFrame([[0], [1], [2], [3], [4]], ["id"])
+    numVertices = vertices.count()
+    vertices = GraphFrame(vertices, edges).outDegrees
+    _ = vertices.cache()
+
+    graph = GraphFrame(vertices, edges)
+    alpha = 0.15
+    pregel = graph.pregel
+
+    # Version with column selection
+    ranks_with_selection = (
+        pregel.setMaxIter(5)
+        .withVertexColumn(
+            "rank",
+            sqlfunctions.lit(1.0 / numVertices),
+            sqlfunctions.coalesce(pregel.msg(), sqlfunctions.lit(0.0))
+            * sqlfunctions.lit(1.0 - alpha)
+            + sqlfunctions.lit(alpha / numVertices),
+        )
+        .sendMsgToDst(pregel.src("rank") / pregel.src("outDegree"))
+        .aggMsgs(sqlfunctions.sum(pregel.msg()))
+        .requiredSrcColumns(sqlfunctions.col("rank"), sqlfunctions.col("outDegree"))
+        .run()
+    )
+
+    # Version without column selection
+    ranks_without_selection = (
+        graph.pregel.setMaxIter(5)
+        .withVertexColumn(
+            "rank",
+            sqlfunctions.lit(1.0 / numVertices),
+            sqlfunctions.coalesce(pregel.msg(), sqlfunctions.lit(0.0))
+            * sqlfunctions.lit(1.0 - alpha)
+            + sqlfunctions.lit(alpha / numVertices),
+        )
+        .sendMsgToDst(pregel.src("rank") / pregel.src("outDegree"))
+        .aggMsgs(sqlfunctions.sum(pregel.msg()))
+        .run()
+    )
+
+    results_with = [row.rank for row in ranks_with_selection.sort("id").collect()]
+    results_without = [row.rank for row in ranks_without_selection.sort("id").collect()]
+
+    # Results should be identical (within floating-point tolerance)
+    for r1, r2 in zip(results_with, results_without):
+        assert abs(r1 - r2) < 1e-10

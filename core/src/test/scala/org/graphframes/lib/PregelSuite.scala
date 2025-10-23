@@ -170,4 +170,213 @@ class PregelSuite extends SparkFunSuite with GraphFrameTestSparkContext {
         .map(r => r.getAs[Long]("id") -> r.getAs[Int]("newColumn"))
         .toMap === Map(1L -> 2, 2L -> 1, 3L -> 2, 4L -> 1))
   }
+
+  test("column selection optimization - requiredSrcColumns only") {
+    // Test with vertices having multiple columns but only one is needed
+    val verDF = Seq(1L, 2L, 3L, 4L, 5L)
+      .toDF("id")
+      .withColumn("extraColumn1", lit("unused"))
+      .withColumn("extraColumn2", lit(999))
+    val edgeDF = Seq((1L, 2L), (2L, 3L), (3L, 4L), (4L, 5L)).toDF("src", "dst")
+    val graph = GraphFrame(verDF, edgeDF)
+
+    val result = graph.pregel
+      .setMaxIter(4)
+      .withVertexColumn(
+        "value",
+        when(col("id") === lit(1), lit(1)).otherwise(lit(0)),
+        when(Pregel.msg > col("value"), Pregel.msg).otherwise(col("value")))
+      .sendMsgToDst(Pregel.src("value"))
+      .aggMsgs(max(Pregel.msg))
+      .requiredSrcColumns(col("value"))
+      .run()
+
+    assert(result.sort("id").select("value").as[Int].collect() === Array.fill(5)(1))
+  }
+
+  test("column selection optimization - requiredDstColumns only") {
+    // Test with only destination columns required
+    val verDF = Seq(1L, 2L, 3L, 4L, 5L)
+      .toDF("id")
+      .withColumn("extraColumn1", lit("unused"))
+      .withColumn("extraColumn2", lit(999))
+    val edgeDF = Seq((2L, 1L), (3L, 2L), (4L, 3L), (5L, 4L)).toDF("src", "dst")
+    val graph = GraphFrame(verDF, edgeDF)
+
+    val result = graph.pregel
+      .setMaxIter(4)
+      .withVertexColumn(
+        "value",
+        when(col("id") === lit(1), lit(1)).otherwise(lit(0)),
+        when(Pregel.msg > col("value"), Pregel.msg).otherwise(col("value")))
+      .sendMsgToSrc(Pregel.dst("value"))
+      .aggMsgs(max(Pregel.msg))
+      .requiredDstColumns(col("value"))
+      .run()
+
+    assert(result.sort("id").select("value").as[Int].collect() === Array.fill(5)(1))
+  }
+
+  test("column selection optimization - both requiredSrcColumns and requiredDstColumns") {
+    // Test with both source and destination columns required
+    val verDF = Seq(1L, 2L, 3L, 4L, 5L)
+      .toDF("id")
+      .withColumn("extraColumn1", lit("unused"))
+      .withColumn("extraColumn2", lit(999))
+    val edgeDF = Seq((1L, 2L), (2L, 3L), (3L, 4L), (4L, 5L)).toDF("src", "dst")
+    val graph = GraphFrame(verDF, edgeDF)
+
+    val result = graph.pregel
+      .setMaxIter(4)
+      .withVertexColumn(
+        "value",
+        when(col("id") === lit(1), lit(1)).otherwise(lit(0)),
+        when(Pregel.msg > col("value"), Pregel.msg).otherwise(col("value")))
+      .sendMsgToDst(when(Pregel.dst("value") =!= Pregel.src("value"), Pregel.src("value")))
+      .aggMsgs(max(Pregel.msg))
+      .requiredSrcColumns(col("value"))
+      .requiredDstColumns(col("value"))
+      .run()
+
+    assert(result.sort("id").select("value").as[Int].collect() === Array.fill(5)(1))
+  }
+
+  test("column selection optimization - multiple columns") {
+    // Test with multiple columns specified
+    val verDF = Seq(1L, 2L, 3L, 4L)
+      .toDF("id")
+      .withColumn("extraColumn", lit("unused"))
+    val edgeDF = Seq((1L, 2L), (2L, 3L), (3L, 4L)).toDF("src", "dst")
+    val graph = GraphFrame(verDF, edgeDF)
+
+    val result = graph.pregel
+      .setMaxIter(3)
+      .withVertexColumn(
+        "sum",
+        when(col("id") === lit(1), lit(1)).otherwise(lit(0)),
+        col("sum") + coalesce(Pregel.msg.getField("value"), lit(0)))
+      .withVertexColumn(
+        "count",
+        lit(0),
+        col("count") + coalesce(Pregel.msg.getField("counter"), lit(0)))
+      .sendMsgToDst(struct(Pregel.src("sum").as("value"), lit(1).as("counter")))
+      .aggMsgs(struct(max(Pregel.msg.getField("value")).as("value"), sum(Pregel.msg.getField("counter")).as("counter")))
+      .requiredSrcColumns(col("sum"), col("count"))
+      .requiredDstColumns(col("sum"), col("count"))
+      .run()
+
+    val collected = result.sort("id").select("sum", "count").collect()
+    assert(collected(0).getAs[Int]("sum") === 1)
+    assert(collected(1).getAs[Int]("sum") === 1)
+    assert(collected(2).getAs[Int]("sum") === 1)
+    assert(collected(3).getAs[Int]("sum") === 1)
+  }
+
+  test("backward compatibility - no column selection specified") {
+    // Ensure that not specifying column selection still works (backward compatibility)
+    val verDF = Seq(1L, 2L, 3L, 4L, 5L)
+      .toDF("id")
+      .withColumn("extraColumn1", lit("data"))
+      .withColumn("extraColumn2", lit(100))
+    val edgeDF = Seq((1L, 2L), (2L, 3L), (3L, 4L), (4L, 5L)).toDF("src", "dst")
+    val graph = GraphFrame(verDF, edgeDF)
+
+    val result = graph.pregel
+      .setMaxIter(4)
+      .withVertexColumn(
+        "value",
+        when(col("id") === lit(1), lit(1)).otherwise(lit(0)),
+        when(Pregel.msg > col("value"), Pregel.msg).otherwise(col("value")))
+      .sendMsgToDst(Pregel.src("value"))
+      .aggMsgs(max(Pregel.msg))
+      // Note: NOT calling requiredSrcColumns or requiredDstColumns
+      .run()
+
+    assert(result.sort("id").select("value").as[Int].collect() === Array.fill(5)(1))
+    // Verify extra columns are still present
+    assert(result.columns.contains("extraColumn1"))
+    assert(result.columns.contains("extraColumn2"))
+  }
+
+  test("column selection optimization - with edge attributes") {
+    // Test that edge columns are still accessible when using column selection
+    val verDF = Seq(1L, 2L, 3L)
+      .toDF("id")
+      .withColumn("extraColumn", lit("unused"))
+    val edgeDF = Seq((1L, 2L, 10), (2L, 3L, 20))
+      .toDF("src", "dst", "weight")
+    val graph = GraphFrame(verDF, edgeDF)
+
+    val result = graph.pregel
+      .setMaxIter(2)
+      .withVertexColumn(
+        "totalWeight",
+        lit(0),
+        col("totalWeight") + coalesce(Pregel.msg, lit(0)))
+      .sendMsgToDst(Pregel.edge("weight"))
+      .aggMsgs(sum(Pregel.msg))
+      .requiredSrcColumns(col("totalWeight"))
+      .requiredDstColumns(col("totalWeight"))
+      .run()
+
+    val weights = result.sort("id").select("totalWeight").as[Int].collect()
+    assert(weights(0) === 0) // vertex 1 receives no messages
+    assert(weights(1) === 10) // vertex 2 receives weight 10
+    assert(weights(2) === 20) // vertex 3 receives weight 20
+  }
+
+  test("column selection optimization - PageRank with column selection") {
+    // Test PageRank algorithm with column selection
+    val edges = Seq(
+      (0L, 1L),
+      (1L, 2L),
+      (2L, 4L),
+      (2L, 0L),
+      (3L, 4L),
+      (4L, 0L),
+      (4L, 2L)).toDF("src", "dst").cache()
+    val vertices = GraphFrame.fromEdges(edges).outDegrees.cache()
+    val numVertices = vertices.count()
+    val graph = GraphFrame(vertices, edges)
+
+    val alpha = 0.15
+    val ranksWithSelection = graph.pregel
+      .setMaxIter(5)
+      .withVertexColumn(
+        "rank",
+        lit(1.0 / numVertices),
+        coalesce(Pregel.msg, lit(0.0)) * (1.0 - alpha) + alpha / numVertices)
+      .sendMsgToDst(Pregel.src("rank") / Pregel.src("outDegree"))
+      .aggMsgs(sum(Pregel.msg))
+      .requiredSrcColumns(col("rank"), col("outDegree"))
+      .run()
+
+    // Compare with version without column selection
+    val ranksWithoutSelection = graph.pregel
+      .setMaxIter(5)
+      .withVertexColumn(
+        "rank",
+        lit(1.0 / numVertices),
+        coalesce(Pregel.msg, lit(0.0)) * (1.0 - alpha) + alpha / numVertices)
+      .sendMsgToDst(Pregel.src("rank") / Pregel.src("outDegree"))
+      .aggMsgs(sum(Pregel.msg))
+      .run()
+
+    val resultWithSelection = ranksWithSelection
+      .sort(col("id"))
+      .select("rank")
+      .as[Double]
+      .collect()
+
+    val resultWithoutSelection = ranksWithoutSelection
+      .sort(col("id"))
+      .select("rank")
+      .as[Double]
+      .collect()
+
+    // Results should be identical
+    resultWithSelection.zip(resultWithoutSelection).foreach { case (r1, r2) =>
+      assert(r1 === r2 +- 1e-10)
+    }
+  }
 }
