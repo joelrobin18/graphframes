@@ -216,7 +216,9 @@ private object ShortestPaths extends Logging {
     // 3. Collect and aggregate messages
     val pregel = preparedGraph.pregel
       .setIntermediateStorageLevel(intermediateStorageLevel)
-      .setMaxIter(Int.MaxValue) // That is how the GraphX implementation works
+      .setMaxIter(Int.MaxValue)
+      .requiredSrcColumns(col(GraphFrame.ID), col(DISTANCE_ID))
+      .requiredDstColumns(col(GraphFrame.ID), col(DISTANCE_ID))
       .withVertexColumn(
         DISTANCE_ID,
         when(col(GraphFrame.ID).isInCollection(landmarks), initDistancesMap(col(GraphFrame.ID)))

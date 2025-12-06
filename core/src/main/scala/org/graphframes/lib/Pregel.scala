@@ -99,6 +99,8 @@ class Pregel(val graph: GraphFrame)
 
   private val sendMsgs = collection.mutable.ListBuffer.empty[(Column, Column)]
   private var aggMsgsCol: Column = null
+  private var requiredSrcCols: Option[Seq[Column]] = None
+  private var requiredDstCols: Option[Seq[Column]] = None
 
   /** Sets the max number of iterations (default: 10). */
   def setMaxIter(value: Int): this.type = {
@@ -214,6 +216,42 @@ class Pregel(val graph: GraphFrame)
    */
   def setSkipMessagesFromNonActiveVertices(value: Boolean): this.type = {
     skipMessagesFromNonActiveVertices = value
+    this
+  }
+
+  /**
+   * Specifies which source vertex columns are required in triplets.
+   *
+   * By default, all source vertex columns are included when constructing triplets, which can
+   * create large datasets in memory. Use this method to specify only the columns needed for
+   * message generation, significantly reducing memory usage.
+   *
+   * @param col
+   *   first required source vertex column
+   * @param cols
+   *   additional required source vertex columns
+   * @return
+   */
+  def requiredSrcColumns(col: Column, cols: Column*): this.type = {
+    requiredSrcCols = Some(col +: cols)
+    this
+  }
+
+  /**
+   * Specifies which destination vertex columns are required in triplets.
+   *
+   * By default, all destination vertex columns are included when constructing triplets, which can
+   * create large datasets in memory. Use this method to specify only the columns needed for
+   * message generation, significantly reducing memory usage.
+   *
+   * @param col
+   *   first required destination vertex column
+   * @param cols
+   *   additional required destination vertex columns
+   * @return
+   */
+  def requiredDstColumns(col: Column, cols: Column*): this.type = {
+    requiredDstCols = Some(col +: cols)
     this
   }
 
@@ -369,11 +407,21 @@ class Pregel(val graph: GraphFrame)
         logInfo(s"start Pregel iteration $iteration / $maxIter")
         val currRoundPersistent = scala.collection.mutable.Queue[DataFrame]()
         currRoundPersistent.enqueue(currentVertices.persist(intermediateStorageLevel))
+
+        val srcStruct = requiredSrcCols match {
+          case Some(cols) => struct(cols: _*)
+          case None => struct(col("*"))
+        }
+        val dstStruct = requiredDstCols match {
+          case Some(cols) => struct(cols: _*)
+          case None => struct(col("*"))
+        }
+
         var tripletsDF = currentVertices
-          .select(struct(col("*")).as(SRC))
+          .select(srcStruct.as(SRC))
           .join(edges, Pregel.src(ID) === col("edge_src"))
           .join(
-            currentVertices.select(struct(col("*")).as(DST)),
+            currentVertices.select(dstStruct.as(DST)),
             col("edge_dst") === Pregel.dst(ID))
           .drop(col("edge_src"), col("edge_dst"))
 

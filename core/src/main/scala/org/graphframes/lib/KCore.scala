@@ -76,6 +76,8 @@ object KCore extends Serializable with Logging {
         .setMaxIter(Int.MaxValue)
         .setIntermediateStorageLevel(storageLevel)
         .setCheckpointInterval(checkpointInterval)
+        .requiredSrcColumns(col(GraphFrame.ID), col(kCoreColumnName))
+        .requiredDstColumns(col(GraphFrame.ID), col(kCoreColumnName))
         .withVertexColumn(
           kCoreColumnName,
           col("degree"),

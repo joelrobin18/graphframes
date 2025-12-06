@@ -110,6 +110,8 @@ private object LabelPropagation {
       graph.edges.select(GraphFrame.SRC, GraphFrame.DST))
 
     var pregel = preparedGraph.pregel
+      .requiredSrcColumns(col(GraphFrame.ID), col(LABEL_ID))
+      .requiredDstColumns(col(GraphFrame.ID), col(LABEL_ID))
       .withVertexColumn(LABEL_ID, col(GraphFrame.ID).alias(LABEL_ID), keyWithMaxValue(Pregel.msg))
       .setMaxIter(maxIter)
       .setStopIfAllNonActiveVertices(true)

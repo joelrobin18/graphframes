@@ -205,6 +205,32 @@ class Pregel(JavaWrapper):
         self._java_obj.setSkipMessagesFromNonActiveVertices(value)
         return self
 
+    def requiredSrcColumns(self, col: Column, *cols: Column) -> Self:
+        """Specifies which source vertex columns are required in triplets.
+
+        By default, all source vertex columns are included when constructing triplets, which can create large datasets in memory.
+        Use this method to specify only the columns needed for message generation, significantly reducing memory usage.
+
+        :param col: first required source vertex column
+        :param cols: additional required source vertex columns
+        """
+        jcols = [col._jc] + [c._jc for c in cols]
+        self._java_obj.requiredSrcColumns(*jcols)
+        return self
+
+    def requiredDstColumns(self, col: Column, *cols: Column) -> Self:
+        """Specifies which destination vertex columns are required in triplets.
+
+        By default, all destination vertex columns are included when constructing triplets, which can create large datasets in memory.
+        Use this method to specify only the columns needed for message generation, significantly reducing memory usage.
+
+        :param col: first required destination vertex column
+        :param cols: additional required destination vertex columns
+        """
+        jcols = [col._jc] + [c._jc for c in cols]
+        self._java_obj.requiredDstColumns(*jcols)
+        return self
+
     def setUseLocalCheckpoints(self, value: bool) -> Self:
         """Set should Pregel use local checkpoints.
 
