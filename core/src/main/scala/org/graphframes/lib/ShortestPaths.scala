@@ -212,6 +212,8 @@ private object ShortestPaths extends Logging {
     val pregel = preparedGraph.pregel
       .setIntermediateStorageLevel(intermediateStorageLevel)
       .setMaxIter(Int.MaxValue) // That is how the GraphX implementation works
+      .withRequiredSrcColumns(DISTANCE_ID)
+      .withRequiredDstColumns(DISTANCE_ID)
       .withVertexColumn(
         DISTANCE_ID,
         when(col(GraphFrame.ID).isInCollection(landmarks), initDistancesMap(col(GraphFrame.ID)))

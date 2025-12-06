@@ -229,6 +229,36 @@ class Pregel(JavaWrapper):
         )
         return self
 
+    def withRequiredSrcColumns(self, col: str, *cols: str) -> Self:
+        """Specifies which source vertex columns are required when constructing triplets.
+
+        By default, Pregel includes all vertex columns in triplets, which can create large datasets
+        in memory for algorithms with big state. This method allows specifying only the columns
+        needed for message generation, reducing memory usage.
+
+        The ID column is always included automatically.
+
+        :param col: the first required column name
+        :param cols: additional required column names
+        """
+        self._java_obj.withRequiredSrcColumns(col, cols)
+        return self
+
+    def withRequiredDstColumns(self, col: str, *cols: str) -> Self:
+        """Specifies which destination vertex columns are required when constructing triplets.
+
+        By default, Pregel includes all vertex columns in triplets, which can create large datasets
+        in memory for algorithms with big state. This method allows specifying only the columns
+        needed for message generation, reducing memory usage.
+
+        The ID column is always included automatically.
+
+        :param col: the first required column name
+        :param cols: additional required column names
+        """
+        self._java_obj.withRequiredDstColumns(col, cols)
+        return self
+
     def run(self) -> DataFrame:
         """Runs the defined Pregel algorithm.
 

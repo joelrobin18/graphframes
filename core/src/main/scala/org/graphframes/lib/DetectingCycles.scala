@@ -88,6 +88,7 @@ object DetectingCycles {
       .setEarlyStopping(false)
       .setSkipMessagesFromNonActiveVertices(true)
       .setInitialActiveVertexExpression(lit(true))
+      .withRequiredSrcColumns(storedSeqCol)
       .sendMsgToDst(sentMessages)
       .setUpdateActiveVertexExpression(Pregel.msg.isNotNull && (size(updateSequences) > lit(0)))
       .withVertexColumn(storedSeqCol, initSequences, updateSequences)

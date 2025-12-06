@@ -170,4 +170,82 @@ class PregelSuite extends SparkFunSuite with GraphFrameTestSparkContext {
         .map(r => r.getAs[Long]("id") -> r.getAs[Int]("newColumn"))
         .toMap === Map(1L -> 2, 2L -> 1, 3L -> 2, 4L -> 1))
   }
+
+  test("withRequiredSrcColumns limits triplet columns from source") {
+    val n = 5
+    val verDF = (1 to n).toDF("id").repartition(3)
+    val edgeDF = (1 until n)
+      .map(x => (x, x + 1))
+      .toDF("src", "dst")
+      .repartition(3)
+
+    val graph = GraphFrame(verDF, edgeDF)
+
+    val resultDF = graph.pregel
+      .setMaxIter(n - 1)
+      .withRequiredSrcColumns("value")
+      .withVertexColumn(
+        "value",
+        when(col("id") === lit(1), lit(1)).otherwise(lit(0)),
+        when(Pregel.msg > col("value"), Pregel.msg).otherwise(col("value")))
+      .sendMsgToDst(when(Pregel.dst("value") =!= Pregel.src("value"), Pregel.src("value")))
+      .aggMsgs(max(Pregel.msg))
+      .run()
+
+    assert(resultDF.sort("id").select("value").as[Int].collect() === Array.fill(n)(1))
+  }
+
+  test("withRequiredDstColumns limits triplet columns from destination") {
+    val n = 5
+    val verDF = (1 to n).toDF("id").repartition(3)
+    val edgeDF = (1 until n)
+      .map(x => (x + 1, x))
+      .toDF("src", "dst")
+      .repartition(3)
+
+    val graph = GraphFrame(verDF, edgeDF)
+
+    val resultDF = graph.pregel
+      .setMaxIter(n - 1)
+      .withRequiredDstColumns("value")
+      .withVertexColumn(
+        "value",
+        when(col("id") === lit(1), lit(1)).otherwise(lit(0)),
+        when(Pregel.msg > col("value"), Pregel.msg).otherwise(col("value")))
+      .sendMsgToSrc(when(Pregel.dst("value") =!= Pregel.src("value"), Pregel.dst("value")))
+      .aggMsgs(max(Pregel.msg))
+      .run()
+
+    assert(resultDF.sort("id").select("value").as[Int].collect() === Array.fill(n)(1))
+  }
+
+  test("withRequiredSrcColumns and withRequiredDstColumns together") {
+    val n = 5
+    val verDF = (1 to n)
+      .map(x => (x, x * 10))
+      .toDF("id", "extra")
+      .repartition(3)
+    val edgeDF = (1 until n)
+      .map(x => (x, x + 1))
+      .toDF("src", "dst")
+      .repartition(3)
+
+    val graph = GraphFrame(verDF, edgeDF)
+
+    val resultDF = graph.pregel
+      .setMaxIter(n - 1)
+      .setCheckpointInterval(0)
+      .withRequiredSrcColumns("value")
+      .withRequiredDstColumns("value")
+      .withVertexColumn(
+        "value",
+        when(col("id") === lit(1), lit(1)).otherwise(lit(0)),
+        when(Pregel.msg > col("value"), Pregel.msg).otherwise(col("value")))
+      .sendMsgToDst(when(Pregel.dst("value") =!= Pregel.src("value"), Pregel.src("value")))
+      .aggMsgs(max(Pregel.msg))
+      .run()
+
+    assert(resultDF.sort("id").select("value").as[Int].collect() === Array.fill(n)(1))
+    assert(resultDF.sort("id").select("extra").as[Int].collect() === (1 to n).map(_ * 10).toArray)
+  }
 }

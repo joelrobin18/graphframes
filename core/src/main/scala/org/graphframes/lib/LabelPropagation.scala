@@ -119,11 +119,15 @@ private object LabelPropagation {
       .setUpdateActiveVertexExpression(col(LABEL_ID) =!= keyWithMaxValue(Pregel.msg))
       .setUseLocalCheckpoints(useLocalCheckpoints)
       .setIntermediateStorageLevel(intermediateStorageLevel)
+      .withRequiredSrcColumns(LABEL_ID)
 
     if (isDirected) {
       pregel = pregel.sendMsgToDst(Pregel.src(LABEL_ID))
     } else {
-      pregel = pregel.sendMsgToDst(Pregel.src(LABEL_ID)).sendMsgToSrc(Pregel.dst(LABEL_ID))
+      pregel = pregel
+        .withRequiredDstColumns(LABEL_ID)
+        .sendMsgToDst(Pregel.src(LABEL_ID))
+        .sendMsgToSrc(Pregel.dst(LABEL_ID))
     }
 
     pregel = pregel.aggMsgs(

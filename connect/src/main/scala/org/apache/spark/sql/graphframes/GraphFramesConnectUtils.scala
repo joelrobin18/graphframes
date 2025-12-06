@@ -317,8 +317,6 @@ object GraphFramesConnectUtils {
         }
 
         if (pregelProto.hasInitialActiveExpr) {
-          // We are not checking here that all the attrs are present;
-          // Check should be done on the client side.
           pregel = pregel
             .setInitialActiveVertexExpression(
               parseColumnOrExpression(pregelProto.getInitialActiveExpr, planner))
@@ -333,6 +331,16 @@ object GraphFramesConnectUtils {
           if (pregelProto.hasStopIfAllNonActive) {
             pregel = pregel.setStopIfAllNonActiveVertices(pregelProto.getStopIfAllNonActive)
           }
+        }
+
+        val requiredSrcCols = pregelProto.getRequiredSrcColumnsList.asScala.toSeq
+        if (requiredSrcCols.nonEmpty) {
+          pregel = pregel.withRequiredSrcColumns(requiredSrcCols.head, requiredSrcCols.tail: _*)
+        }
+
+        val requiredDstCols = pregelProto.getRequiredDstColumnsList.asScala.toSeq
+        if (requiredDstCols.nonEmpty) {
+          pregel = pregel.withRequiredDstColumns(requiredDstCols.head, requiredDstCols.tail: _*)
         }
 
         pregel = pregelProto.getSendMsgToSrcList.asScala

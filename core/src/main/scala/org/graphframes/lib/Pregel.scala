@@ -100,6 +100,9 @@ class Pregel(val graph: GraphFrame)
   private val sendMsgs = collection.mutable.ListBuffer.empty[(Column, Column)]
   private var aggMsgsCol: Column = null
 
+  private var requiredSrcCols: Option[Seq[String]] = None
+  private var requiredDstCols: Option[Seq[String]] = None
+
   /** Sets the max number of iterations (default: 10). */
   def setMaxIter(value: Int): this.type = {
     maxIter = value
@@ -214,6 +217,44 @@ class Pregel(val graph: GraphFrame)
    */
   def setSkipMessagesFromNonActiveVertices(value: Boolean): this.type = {
     skipMessagesFromNonActiveVertices = value
+    this
+  }
+
+  /**
+   * Specifies which source vertex columns are required when constructing triplets.
+   *
+   * By default, Pregel includes all vertex columns in triplets, which can create large datasets
+   * in memory for algorithms with big state. This method allows specifying only the columns
+   * needed for message generation, reducing memory usage.
+   *
+   * The ID column is always included automatically.
+   *
+   * @param col
+   *   the first required column name
+   * @param cols
+   *   additional required column names
+   */
+  def withRequiredSrcColumns(col: String, cols: String*): this.type = {
+    requiredSrcCols = Some(col +: cols)
+    this
+  }
+
+  /**
+   * Specifies which destination vertex columns are required when constructing triplets.
+   *
+   * By default, Pregel includes all vertex columns in triplets, which can create large datasets
+   * in memory for algorithms with big state. This method allows specifying only the columns
+   * needed for message generation, reducing memory usage.
+   *
+   * The ID column is always included automatically.
+   *
+   * @param col
+   *   the first required column name
+   * @param cols
+   *   additional required column names
+   */
+  def withRequiredDstColumns(col: String, cols: String*): this.type = {
+    requiredDstCols = Some(col +: cols)
     this
   }
 
@@ -364,16 +405,25 @@ class Pregel(val graph: GraphFrame)
       }
     }
 
+    def selectVertexColumns(df: DataFrame, requiredCols: Option[Seq[String]], as: String): DataFrame = {
+      requiredCols match {
+        case Some(cols) =>
+          val allCols = (Seq(ID, Pregel.ACTIVE_FLAG_COL) ++ cols).distinct
+          df.select(struct(allCols.map(col): _*).as(as))
+        case None =>
+          df.select(struct(col("*")).as(as))
+      }
+    }
+
     breakable {
       while (iteration <= maxIter) {
         logInfo(s"start Pregel iteration $iteration / $maxIter")
         val currRoundPersistent = scala.collection.mutable.Queue[DataFrame]()
         currRoundPersistent.enqueue(currentVertices.persist(intermediateStorageLevel))
-        var tripletsDF = currentVertices
-          .select(struct(col("*")).as(SRC))
+        var tripletsDF = selectVertexColumns(currentVertices, requiredSrcCols, SRC)
           .join(edges, Pregel.src(ID) === col("edge_src"))
           .join(
-            currentVertices.select(struct(col("*")).as(DST)),
+            selectVertexColumns(currentVertices, requiredDstCols, DST),
             col("edge_dst") === Pregel.dst(ID))
           .drop(col("edge_src"), col("edge_dst"))
 
